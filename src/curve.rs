@@ -1,16 +1,29 @@
-use crate::field::FieldElement;
 use num_bigint::{BigInt, BigUint, ToBigInt};
 use num_traits::{One, Zero};
+use thiserror::Error;
 
 #[derive(Clone, Debug)]
 pub struct Curve {
-    pub a: FieldElement,
-    pub b: FieldElement,
+    pub a: BigUint,
+    pub b: BigUint,
+    pub prime: BigUint,
 }
 
+#[derive(Debug, Error)]
+pub enum CurveError {
+    #[error("Singular Curve: Discriminant is 0")]
+    SingularCurve,
+}
+
+
 impl Curve {
-    pub fn new(a: FieldElement, b: FieldElement) -> Self {
-        Curve { a, b }
+    pub fn new(a: BigUint, b: BigUint, prime: BigUint) -> Result<Self, CurveError> {
+        let discriminant = BigUint::from(4u8) * a.modpow(&BigUint::from(3u8), &prime) + 
+                           BigUint::from(27u8) * b.modpow(&BigUint::from(2u8), &prime) % &prime;
+        if discriminant.is_zero() {
+            return Err(CurveError::SingularCurve);
+        }
+        Ok(Curve { a, b, prime })
     }
 
 
@@ -25,22 +38,22 @@ impl Curve {
         if p1.x == p2.x && p1.y != p2.y {
             return Point::infinity();
         }
-        if p1.x == p2.x && p1.y == p2.y {
+        if p1==p2 {
             return self.double_point(p1);
         }
         
-        let x1 = &p1.x.as_ref().unwrap().num.to_bigint().unwrap();
-        let y1 = &p1.y.as_ref().unwrap().num.to_bigint().unwrap();
-        let x2 = &p2.x.as_ref().unwrap().num.to_bigint().unwrap();
-        let y2 = &p2.y.as_ref().unwrap().num.to_bigint().unwrap();
-        let prime = &p1.x.as_ref().unwrap().prime.to_bigint().unwrap();
-
-        let m: BigInt = ((y2 - y1) % prime) * modinv(&(x2 - x1), prime).unwrap() % prime;
-        let x3 = &(((m.modpow(&BigInt::from(2u8), prime) - x1 - x2) % prime) + prime % prime);
-        let y3 = (m * (x1 - x3) - y1) % prime + prime % prime;
-        Point::new(
-            FieldElement::new(x3.to_biguint().unwrap(), prime.to_biguint().unwrap()),
-            FieldElement::new(y3.to_biguint().unwrap(), prime.to_biguint().unwrap()),
+        let x1 = &p1.x.as_ref().unwrap().to_bigint().unwrap();
+        let y1 = &p1.y.as_ref().unwrap().to_bigint().unwrap();
+        let x2 = &p2.x.as_ref().unwrap().to_bigint().unwrap();
+        let y2 = &p2.y.as_ref().unwrap().to_bigint().unwrap();
+        let prime = &self.prime.to_bigint().unwrap();
+        let m: BigInt = ((y2 - y1) % prime ) * modinv(&(x2 - x1), prime).unwrap() % prime;
+        let x3 = &((((m.modpow(&BigInt::from(2u8), prime) - x1 - x2) % prime) + prime) % prime);
+        let y3 = ((m * (x1 - x3) - y1) % prime + prime) % prime;
+        Point::new_mod(
+            x3.to_biguint().unwrap(),
+            y3.to_biguint().unwrap(),
+            self.prime.clone()
         )
 
     }
@@ -49,20 +62,21 @@ impl Curve {
         if p.x.is_none() {
             return Point::infinity();
         }
-        let x = &p.x.as_ref().unwrap().num.to_bigint().unwrap();
-        let y = &p.y.as_ref().unwrap().num.to_bigint().unwrap();
-        let prime = &p.x.as_ref().unwrap().prime.to_bigint().unwrap();
+        let x = &p.x.as_ref().unwrap().to_bigint().unwrap();
+        let y = &p.y.as_ref().unwrap().to_bigint().unwrap();
+        let prime = &self.prime.to_bigint().unwrap();
 
         if y.is_zero() {
             return Point::infinity();
         }
 
         let m: BigInt = (BigInt::from(3u8) * x.modpow(&BigInt::from(2u8), prime)
-        + (&self.a.num.to_bigint().unwrap() % prime) * modinv(&(BigInt::from(2u8) * y), prime).unwrap()) % prime;
+        + (&self.a.to_bigint().unwrap() % prime) * modinv(&(BigInt::from(2u8) * y), prime).unwrap()) % prime;
         let xp: BigInt = (m.modpow(&BigInt::from(2u8), prime) - BigInt::from(2u8) * x) % prime + prime % prime;
-        Point::new(
-            FieldElement::new(xp.to_biguint().unwrap(), prime.to_biguint().unwrap()),
-            FieldElement::new(((((m * (x - xp) - y) % prime) + prime) % prime).to_biguint().unwrap(), prime.to_biguint().unwrap()),
+        Point::new_mod(
+            xp.to_biguint().unwrap(),
+            ((m * (x - xp) - y) % prime + prime % prime).to_biguint().unwrap(),
+            self.prime.clone()
         )
     }
 
@@ -72,10 +86,10 @@ impl Curve {
             return true; // Point at infinity is on the curve
         }
         if let (Some(x), Some(y)) = (&point.x, &point.y) {
-            let left = y.num.modpow(&BigUint::from(2u8), &y.prime);
-            let right = (x.num.modpow(&BigUint::from(3u8), &x.prime) + 
-                         self.a.num.modpow(&BigUint::from(1u8), &x.prime) * x.num.modpow(&BigUint::from(1u8), &x.prime) + 
-                         self.b.num.modpow(&BigUint::from(1u8), &x.prime)) % &x.prime;
+            let left = y.modpow(&BigUint::from(2u8), &self.prime);
+            let right = (x.modpow(&BigUint::from(3u8), &self.prime) + 
+                         self.a.modpow(&BigUint::from(1u8), &self.prime) * x.modpow(&BigUint::from(1u8), &self.prime) + 
+                         self.b.modpow(&BigUint::from(1u8), &self.prime)) % &self.prime;
             return left == right;
         }
         false
@@ -95,10 +109,10 @@ impl Curve {
 
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug,Eq, PartialEq)]
 pub struct Point {
-    pub x: Option<FieldElement>,
-    pub y: Option<FieldElement>,
+    pub x: Option<BigUint>,
+    pub y: Option<BigUint>,
 }
 
 impl Point {
@@ -106,8 +120,15 @@ impl Point {
         Point { x: None, y: None }
     }
 
-    pub fn new(x: FieldElement, y: FieldElement) -> Self {
+    pub fn new(x: BigUint, y: BigUint) -> Self {
         Point { x: Some(x), y: Some(y) }
+    }
+
+    pub fn new_mod(x: BigUint, y: BigUint, prime: BigUint) -> Self {
+        Point { 
+            x: Some(x % &prime), 
+            y: Some(y % &prime) 
+        }
     }
 }
 

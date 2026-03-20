@@ -1,8 +1,6 @@
-pub mod field;
 pub mod curve;
 pub mod key;
 
-pub use field::FieldElement;
 pub use curve::{Curve, Point};
 pub use key::{PrivateKey, PublicKey};
 

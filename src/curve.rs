@@ -13,6 +13,8 @@ pub struct Curve {
 pub enum CurveError {
     #[error("Singular Curve: Discriminant is 0")]
     SingularCurve,
+    #[error("Point is not on the curve")]
+    PointNotOnCurve,
 }
 
 
@@ -28,19 +30,28 @@ impl Curve {
 
 
 
-    pub fn add_points(&self, p1: &Point, p2: &Point) -> Point {
+    pub fn add_points(&self, p1: &Point, p2: &Point) -> Result<Point, CurveError> {
+        if !self.is_on_curve(p1) {
+            println!("Point {:?} is not on the curve, add points", p1);
+            return Err(CurveError::PointNotOnCurve);
+        }
+        if !self.is_on_curve(p2) {
+            println!("Point {:?} is not on the curve, add points", p2);
+            return Err(CurveError::PointNotOnCurve);
+        }
         if p1.x.is_none() {
-            return p2.clone();
+            return Ok(p2.clone());
         }
         if p2.x.is_none() {
-            return p1.clone();
+            return Ok(p1.clone());
         }
         if p1.x == p2.x && p1.y != p2.y {
-            return Point::infinity();
+            return Ok(Point::infinity());
         }
         if p1==p2 {
             return self.double_point(p1);
         }
+        
         
         let x1 = &p1.x.as_ref().unwrap().to_bigint().unwrap();
         let y1 = &p1.y.as_ref().unwrap().to_bigint().unwrap();
@@ -50,36 +61,56 @@ impl Curve {
         let m: BigInt = ((y2 - y1) % prime ) * modinv(&(x2 - x1), prime).unwrap() % prime;
         let x3 = &((((m.modpow(&BigInt::from(2u8), prime) - x1 - x2) % prime) + prime) % prime);
         let y3 = ((m * (x1 - x3) - y1) % prime + prime) % prime;
-        Point::new_mod(
+        Ok(Point::new_mod(
             x3.to_biguint().unwrap(),
             y3.to_biguint().unwrap(),
             self.prime.clone()
-        )
+        ))
 
     }
 
-    pub fn double_point(&self, p: &Point) -> Point {
+    pub fn double_point(&self, p: &Point) -> Result<Point, CurveError> {
+        if !self.is_on_curve(p) {
+            println!("Point {:?} is not on the curve, double point", p);
+            return Err(CurveError::PointNotOnCurve);
+        }
         if p.x.is_none() {
-            return Point::infinity();
+            return Ok(Point::infinity());
         }
         let x = &p.x.as_ref().unwrap().to_bigint().unwrap();
         let y = &p.y.as_ref().unwrap().to_bigint().unwrap();
         let prime = &self.prime.to_bigint().unwrap();
-
+        
         if y.is_zero() {
-            return Point::infinity();
+            return Ok(Point::infinity());
         }
 
-        let m: BigInt = (BigInt::from(3u8) * x.modpow(&BigInt::from(2u8), prime)
-        + (&self.a.to_bigint().unwrap() % prime) * modinv(&(BigInt::from(2u8) * y), prime).unwrap()) % prime;
-        let xp: BigInt = (m.modpow(&BigInt::from(2u8), prime) - BigInt::from(2u8) * x) % prime + prime % prime;
-        Point::new_mod(
+        let m: BigInt = ((BigInt::from(3u8) * x.modpow(&BigInt::from(2u8), prime)
+        + (&self.a.to_bigint().unwrap() % prime)) * modinv(&(BigInt::from(2u8) * y), prime).unwrap()) % prime;
+        let xp: BigInt = ((m.modpow(&BigInt::from(2u8), prime) - BigInt::from(2u8) * x) % prime + prime) % prime;
+        Ok(Point::new_mod(
             xp.to_biguint().unwrap(),
-            ((m * (x - xp) - y) % prime + prime % prime).to_biguint().unwrap(),
+            (((m * (x - xp) - y) % prime + prime) % prime).to_biguint().unwrap(),
             self.prime.clone()
-        )
+        ))
     }
 
+    pub fn scalar_mult(&self, p: &Point, n: &BigUint) -> Result<Point, CurveError> {
+        if !self.is_on_curve(p) {
+            println!("Point {:?} is not on the curve, scalar mult", p);
+            return Err(CurveError::PointNotOnCurve);
+        }
+        let mut result = Point::infinity();
+        let mut pot_2 = p.clone();
+        for i in 0..(n.bits()) {
+            if n.bit(i) {
+                result = self.add_points(&result, &pot_2)?;
+            }
+            pot_2 = self.double_point(&pot_2)?;
+        }
+        Ok(result)
+
+    }
 
     pub fn is_on_curve(&self, point: &Point) -> bool {
         if point.x.is_none() && point.y.is_none() {
@@ -95,14 +126,14 @@ impl Curve {
         false
     }
 
-    pub fn order(&self, p: &Point) -> BigUint {
+    pub fn order(&self, p: &Point) -> Result<BigUint, CurveError> {
         let mut count = BigUint::from(1u8);
         let mut current = p.clone();
         while current.x.is_some() {
-            current = self.add_points(&current, p);
+            current = self.add_points(&current, p)?;
             count += 1u8;
         }
-        count
+        Ok(count)
     }
 
 }
@@ -134,7 +165,7 @@ impl Point {
 
 fn modinv(a: &BigInt, m: &BigInt) -> Option<BigInt> {
     let (g, x, _y) = extended_gcd(a.clone(), m.clone());
-    if g != BigInt::one() {
+    if g != BigInt::one() && g != BigInt::from(-1) {
         return None;
     }
     Some((x % m + m) % m)
